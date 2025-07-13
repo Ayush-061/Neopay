@@ -1,0 +1,174 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract UTXSpender {
+    // --- Data Structures ---
+    struct UTXO {
+        uint256 amount;
+        address owner;
+        bool spent;
+    }
+    struct UTXTransaction {
+        bytes32 utxoId;
+        uint256 amount;
+        address owner;
+    }
+    // --- Constants ---
+    address public merchantAdress = 0x49a9e170d8a919B16b3d2021c20201e7A9a04829;
+    // --- State Variables ---
+
+    IERC20 public immutable jiitToken;
+    mapping(bytes32 => UTXO) public utxos;           // utxoId => UTXO
+    mapping(address => uint256) public userNonce;    // Prevents UTXO ID collisions
+    mapping(address => uint256) public userBalances; // User address => current balance
+
+    // --- Events ---
+    event UTXOCreated(bytes32 indexed utxoId, address indexed owner, uint256 amount);
+    event UTXOBurned(bytes32 indexed utxoId, address indexed owner, uint256 amount);
+    event UTXORevoked(bytes32 indexed utxoId, address indexed owner, uint256 amount);
+
+    event BalanceChecked(address owner);
+    // --- Constructor ---
+    constructor(address _jiitTokenAddress) {
+        jiitToken = IERC20(_jiitTokenAddress);
+    }
+
+
+    modifier onlyMerchant() {
+    require(msg.sender == merchantAdress, "Not merchant");
+    _;
+}
+    // --- Core Functions ---
+
+    /**
+     * @dev Locks JIIT tokens into a new UTXO (called during top-up).
+     */
+ event LogGeneratedUTXO(bytes32 utxoId);
+
+function issueUtxo(uint256 amount, address user) external onlyMerchant returns (bytes32) {
+    require(amount > 0, "Amount must be > 0");
+
+    // if (userBalances[user] > amount) {
+    //     userNonce[user]++;
+    //     bytes32 utxoId = keccak256(abi.encodePacked(msg.sender, userNonce[user], amount));
+        
+    //     // Emit the event for debugging
+    //     emit LogGeneratedUTXO(utxoId);
+
+    //     utxos[utxoId] = UTXO(amount, user, false);
+    //     utxos[utxoId].amount += amount;
+    //     userBalances[user] -= amount;
+
+    //     emit UTXOCreated(utxoId, user, amount);
+    //     return utxoId;
+    // } else {
+        // Ensure proper token transfer with 10^18 adjustment for decimals
+        require(jiitToken.transferFrom(user, address(this), amount * 10**18), "JIIT transfer failed");
+
+        userNonce[user]++;
+        bytes32 utxoId = keccak256(abi.encodePacked(msg.sender, userNonce[user], amount));
+
+        // Emit the event for debugging
+        emit LogGeneratedUTXO(utxoId);
+
+        utxos[utxoId] = UTXO(amount, user, false);
+        userBalances[user] += amount;
+
+        emit UTXOCreated(utxoId, user, amount);
+        return utxoId;
+    // }
+}
+
+    /**
+     * @dev Burns a UTXO to pay a merchant. Automatically handles change.
+     */
+    function burnUtxo(bytes32 utxoId, uint256 paymentAmount , address userAddress) external onlyMerchant {
+        UTXO storage utxo = utxos[utxoId];
+        require(!utxo.spent, "UTXO already spent");
+        require(utxo.amount >= paymentAmount, "Insufficient funds");
+        require(utxo.owner == userAddress, "Not UTXO owner");
+        utxo.spent = true;
+        require(jiitToken.transfer(merchantAdress, paymentAmount), "Merchant transfer failed");
+
+        // Create change UTXO if needed
+        uint256 change = utxo.amount - paymentAmount;
+        userBalances[userAddress] -= paymentAmount;
+
+        if (change > 0) {
+            // userNonce[userAddress]++;
+            // bytes32 changeUtxoId = keccak256(abi.encodePacked(msg.sender, userNonce[userAddress], change));
+            // utxos[changeUtxoId] = UTXO(change, userAddress, false);
+            // emit UTXOCreated(changeUtxoId, userAddress, change);
+        }
+
+        emit UTXOBurned(utxoId, userAddress, paymentAmount);
+    }
+
+    function utxoIssued(bytes32 utxoId, address user, uint256 amount) external onlyMerchant {
+        require(utxos[utxoId].amount == 0, "UTXO already exists");
+        utxos[utxoId] = UTXO(amount, user, false);
+        emit UTXOCreated(utxoId, user, amount);
+    }
+
+    function burnMultipleUtxos(UTXTransaction[] calldata transactions) external onlyMerchant{
+        for (uint256 i = 0; i < transactions.length; i++) {
+            bytes32 utxoId = transactions[i].utxoId;
+            uint256 paymentAmount = transactions[i].amount;
+            address userAddress = transactions[i].owner;
+            
+            // Process each individual transaction
+            this.burnUtxo(utxoId, paymentAmount, userAddress);
+        }
+    }
+
+
+ /**
+     * @dev revoke a UTXO to if nfc lost . 
+     */
+     function revokeUtxo(bytes32 utxoId ,address userAddress) external onlyMerchant {
+        UTXO storage utxo = utxos[utxoId];
+        require(merchantAdress == msg.sender, "Not merchant");
+        require(!utxo.spent, "UTXO already spent");
+        require(utxo.owner == userAddress, "Not UTXO owner");
+        utxo.spent = true;
+
+        // Create change UTXO if old one revoked
+
+        
+
+        emit UTXORevoked(utxoId, userAddress, utxo.amount);
+    }
+
+    function getUtxoHash(bytes32 utxoId, uint256 amount, address owner) public pure returns (bytes32) {
+    return keccak256(abi.encodePacked(utxoId, amount, owner));
+}
+    
+    // --- View Functions ---
+
+    /**
+     * @dev Checks if a UTXO is valid and unspent.
+     */
+    function verifyUtxo(bytes32 utxoId) external view returns (bool isValid, uint256 amount, address owner) {
+        UTXO memory utxo = utxos[utxoId];
+        isValid = !utxo.spent && utxo.amount > 0;
+        amount = utxo.amount;
+        owner = utxo.owner;
+    }
+
+
+    /**
+     * @dev Returns the balance of a user.
+     */
+    function getUserBalance(address user) external view returns (uint256) {
+        return userBalances[user];
+    }
+
+
+    function eventChecker(address user) public{
+        emit BalanceChecked(user);
+    }
+
+    
+}

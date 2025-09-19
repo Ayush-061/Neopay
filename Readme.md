@@ -1,7 +1,7 @@
 # NeoPay: NFC Tap-to-Pay Blockchain Payment System for College Campuses
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Status-Under%20Development-orange?style=for-the-badge" alt="Project Status">
+
   <img src="https://img.shields.io/badge/Blockchain-Polygon-purple?style=for-the-badge&logo=polygon" alt="Blockchain Used">
   <img src="https://img.shields.io/badge/Frontend-React%20Native-blue?style=for-the-badge&logo=react" alt="Frontend Technology">
   <img src="https://img.shields.io/badge/Payments-Offline%20%26%20Instant-green?style=for-the-badge" alt="Payment Type">
